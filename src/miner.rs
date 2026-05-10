@@ -23,40 +23,45 @@ pub struct MinerStats {
     report_every: u32,
 }
 
+/// Duas linhas fixas no topo: (1) hashrate, (2) status — sempre reescritas no lugar (ANSI).
 struct TerminalUi {
-    log_lines: u32,
+    hashrate_line: String,
+    status_line: String,
 }
 
 impl TerminalUi {
     fn new() -> Self {
-        Self { log_lines: 0 }
+        Self {
+            hashrate_line: "hashrate: --".to_string(),
+            status_line: "status: iniciando…".to_string(),
+        }
     }
 
     fn init(&mut self) {
-        // Linha 1: hashrate (fixa). Linha 2+: logs.
-        self.render_header("hashrate: --");
-        println!();
-        self.log_lines = 0;
+        println!("{}", self.hashrate_line);
+        println!("{}", self.status_line);
+        // Cursor fica na linha 3; `redraw` sobe 2 linhas e reescreve as duas.
     }
 
-    fn log(&mut self, msg: impl AsRef<str>) {
-        println!("{}", msg.as_ref());
-        self.log_lines = self.log_lines.saturating_add(1);
-    }
-
-    fn render_header(&self, text: &str) {
-        // Reescreve a 1ª linha relativa ao início do programa.
-        // Estratégia: salvar cursor, subir (log_lines + 1) linhas, limpar linha, imprimir, restaurar cursor.
-        // OBS: isso pressupõe terminal ANSI (padrão em Linux).
-        let up = self.log_lines.saturating_add(1);
+    /// Reescreve linha 1 (hashrate) e linha 2 (status) sem criar linhas novas.
+    fn redraw(&self) {
         let mut out = io::stdout().lock();
         let _ = write!(
             out,
-            "\x1b[s\x1b[{}A\r\x1b[2K{}\x1b[u",
-            up,
-            text
+            "\x1b[2A\r\x1b[2K{}\n\r\x1b[2K{}\n",
+            self.hashrate_line, self.status_line
         );
         let _ = out.flush();
+    }
+
+    fn set_hashrate(&mut self, text: impl Into<String>) {
+        self.hashrate_line = text.into();
+        self.redraw();
+    }
+
+    fn set_status(&mut self, text: impl Into<String>) {
+        self.status_line = text.into();
+        self.redraw();
     }
 }
 
@@ -71,7 +76,7 @@ impl MinerStats {
         }
     }
 
-    fn tick_one_hash(&mut self, ui: &TerminalUi) {
+    fn tick_one_hash(&mut self, ui: &mut TerminalUi) {
         self.total_hashes += 1;
         if self.report_every == 0 {
             return;
@@ -89,7 +94,7 @@ impl MinerStats {
         let dh = (self.total_hashes - self.last_report_hashes) as f64;
         let hps = dh / dt;
         let total_hps = (self.total_hashes as f64) / self.start.elapsed().as_secs_f64().max(1e-9);
-        ui.render_header(&format!(
+        ui.set_hashrate(format!(
             "hashrate: {:.2} MH/s (inst) | {:.2} MH/s (médio) | hashes={}",
             hps / 1e6,
             total_hps / 1e6,
@@ -208,6 +213,16 @@ pub fn mine_forever(
             )
             .with_context(|| "getblocktemplate falhou")?;
 
+        let prev_short = tmpl
+            .previousblockhash
+            .chars()
+            .take(16)
+            .collect::<String>();
+        ui.set_status(format!(
+            "status: minerando | altura {} | prev {}…",
+            tmpl.height, prev_short
+        ));
+
         // 2) Parse do hash do bloco anterior (prev_blockhash), que "ancora" o próximo bloco na cadeia.
         let prev_hash =
             bitcoin::BlockHash::from_str(&tmpl.previousblockhash).with_context(|| "prev hash")?;
@@ -259,7 +274,7 @@ pub fn mine_forever(
             while tried < max_tries {
                 // 6.1) Serializar o header exatamente como na rede e computar o sha256d dele.
                 let header_ser = serialize(&header);
-                stats.tick_one_hash(&ui);
+                stats.tick_one_hash(&mut ui);
 
                 // 6.2) Se o digest atende o target, temos um bloco válido (PoW).
                 if hash_meets_target(&header_ser, &target_be) {
@@ -277,12 +292,12 @@ pub fn mine_forever(
 
                     // 6.5) `submitblock` retorna null quando o bloco foi aceito (ou já conhecido).
                     if submit.is_null() {
-                        ui.log(format!(
-                            "Bloco encontrado e aceito! hash={}",
+                        ui.set_status(format!(
+                            "status: bloco aceito | {}",
                             block.block_hash()
                         ));
                     } else {
-                        ui.log(format!("Bloco encontrado mas rejeitado: {}", submit));
+                        ui.set_status(format!("status: bloco rejeitado | {}", submit));
                     }
                     break;
                 }

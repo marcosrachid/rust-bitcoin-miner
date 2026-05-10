@@ -13,6 +13,52 @@ Miner simples em Rust que usa `bitcoind` via RPC:
 - `src/gbt.rs`: modelo do retorno de `getblocktemplate`
 - `src/miner.rs`: loop de mineração + hashrate + construção de bloco
 
+## Porta RPC: padrão e como descobrir
+
+O miner fala com o `bitcoind` por HTTP na **porta RPC** (não confundir com a porta **P2P**, em que o nó troca blocos com outros nós).
+
+### Portas padrão (se você não definiu `rpcport`)
+
+| Rede    | RPC (JSON-RPC) | P2P (rede Bitcoin) |
+|---------|----------------|---------------------|
+| **mainnet** | `8332`     | `8333`              |
+| **testnet** | `18332`    | `18333`             |
+| **regtest** | `18443`    | `18444`             |
+| **signet**  | `38332`    | `38333`             |
+
+O `RPC_URL` do `.env` deve usar a **porta RPC** (ex.: regtest → `http://127.0.0.1:18443`).
+
+### Se você definiu `rpcport` no `bitcoin.conf`
+
+Qualquer valor em `rpcport=` (no arquivo global ou dentro de `[main]`, `[test]`, `[regtest]`, etc.) **substitui o padrão** daquela rede. Confira no arquivo:
+
+```bash
+grep -n 'rpcport=' ~/.bitcoin/bitcoin.conf
+grep -n '^\[' ~/.bitcoin/bitcoin.conf
+```
+
+(Ajuste o caminho se seu `bitcoind` usar outro diretório de dados.)
+
+### Depois de `bitcoind -regtest -daemon` (ou outra rede): ver o que está escutando
+
+O jeito mais direto no Linux é listar as portas TCP em que o processo `bitcoind` está em **LISTEN**:
+
+```bash
+ss -ltnp | grep bitcoind
+```
+
+Você costuma ver **duas** portas: uma é a **RPC** (ex.: `18443` no regtest), outra é a **P2P** (ex.: `18444` no regtest). Use a RPC no `RPC_URL`.
+
+Alternativa:
+
+```bash
+sudo lsof -iTCP -sTCP:LISTEN -c bitcoind
+```
+
+### `getnetworkinfo` não mostra a porta RPC
+
+O comando `bitcoin-cli -regtest getnetworkinfo` (e equivalentes) expõe sobretudo dados da **rede P2P**; o campo `port` aí é a porta P2P, não a RPC. Para a RPC, use `rpcport` no conf ou `ss`/`lsof` como acima.
+
 ## Rodando em regtest (recomendado)
 
 1) Suba um `bitcoind` em regtest com RPC habilitado (exemplo `~/.bitcoin/bitcoin.conf`):
@@ -202,6 +248,26 @@ cargo run --release
 
 - **Nunca exponha o RPC** do seu `bitcoind` para a internet.
 - Mantenha `rpcbind`/`rpcallowip` restritos ao localhost, como acima.
+
+## Parar o `bitcoind`
+
+O jeito correto é pedir o encerramento limpo via RPC (o nó grava estado e fecha conexões).
+
+| Rede    | Comando |
+|---------|---------|
+| **Mainnet** | `bitcoin-cli stop` |
+| **Testnet** | `bitcoin-cli -testnet stop` |
+| **Regtest** | `bitcoin-cli -regtest stop` |
+
+Se você tiver **vários** `bitcoind` ao mesmo tempo (ex.: mainnet e testnet), use o flag da rede correspondente ao processo que quer parar.
+
+Verificar se ainda há processo rodando:
+
+```bash
+pgrep -a bitcoind || echo "nenhum bitcoind"
+```
+
+Só em último caso (travou e não responde a `stop`): encerre pelo PID, por exemplo `kill <PID>` ou `kill -9 <PID>` após `pgrep bitcoind`.
 
 ## Observações
 
